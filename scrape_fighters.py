@@ -27,36 +27,7 @@ from datetime import datetime
 
 
 
-
-
-
-
-
-def safe_int(value):
-    if value in (None, ""):
-        return 0
-    return int(float(value))
-
-
-def safe_float(value):
-    if value in (None, ""):
-        return 0.0
-    return float(value)
-
-
-def safe_percent(value):
-    if value in (None, ""):
-        return 0.0
-    return float(value.replace("%", ""))
-
-
-
-
-
-
-
-
-
+# connect to the database maine
 conn = psycopg.connect(
     dbname="manas_ufc_pred_machine",
     user="Manas"
@@ -64,11 +35,6 @@ conn = psycopg.connect(
 
 cur = conn.cursor()
 
-
-''''We are going to write the insert/update scripts. These are going to be the scripts that pushes the data into predefined columns and tables'''
-# def insert_performance_stats(cur, fighter_id, stats):
-# def insert_fighter(...)
-# def insert_fighter_performance_stats(...)
 
 
 
@@ -80,17 +46,17 @@ fighter_cards = set()  # to store unique fighter profile URLs
 
 '''we want to define all major helper functions in this file, 
 and then we will have a main function that calls these helpers to do the actual scraping and database insertion. 
-this way we can keep our code organized and modular, and we can also easily test each helper function individually before integrating them into the main scraper loop.'''
-
-
-
-
-
+this way we can keep our code organized and modular, 
+and we can also easily test each helper function individually before integrating them into the main scraper loop.'''
 def get_fighter_name_from_soup(soup):
     Fighter_Name_section = soup.find("div", class_="hero-profile__info")
-    if Fighter_Name_section:
+    # we do the 'is None' check because if fighter_name_section is not found then we wont pass name_tag which if we did pass would cause unboundedLocalError
+    if Fighter_Name_section is None:
+        print ("no fighter name found gang")
+        return None
+    else:
         Name_tag = (Fighter_Name_section.find("h1", class_="hero-profile__name")).get_text(strip=True)
-    return Name_tag
+        return Name_tag
 
 
 
@@ -98,14 +64,15 @@ def get_fighter_name_from_soup(soup):
 
 
 
-
+'''this function extracts all the Bio data such height, weight, age and shit like that'''
 def extract_bio_from_soup(soup):
     # this is the intitialization add logic to get rest of bio stats
     bio_section = soup.find("div", class_="c-bio__info-details")
-    result = {}
+    # dictionary where we store our bio stats
+    bio_stats = {}
     if not bio_section:
-        return result
-    # Primary strategy: pair all label and text elements found in the bio section
+        return bio_stats
+    # We are gonna use 2 strats. Primary strategy: pair all label and text elements found in the bio section
     labels = [l.get_text(strip=True) for l in bio_section.find_all("div", class_="c-bio__label")]
     texts = [t.get_text(strip=True) for t in bio_section.find_all("div", class_="c-bio__text")]
 # iteratese through the labels and texts in parallel, 
@@ -126,29 +93,19 @@ def extract_bio_from_soup(soup):
                 except ValueError:
                     pass  # Keeps the original string if parsing completely fails
                     
-        result[clean_key] = value
+        bio_stats[clean_key] = value
 
     # Fallback: if labels weren't found as separate elements, try row-wise extraction
-    if not result:
+    if not bio_stats:
         for row in bio_section.find_all("div", class_="c-bio__row--3col"):
             label_tag = row.find("div", class_="c-bio__label")
             text_tag = row.find("div", class_="c-bio__text")
             label = label_tag.get_text(strip=True) if label_tag else None
             value = text_tag.get_text(strip=True) if text_tag else None
             if label or value:
-                result[label] = value
+                bio_stats[label] = value
 
-    return result
-
-
-
-
-
-
-
-
-
-
+    return bio_stats
 
 
 
@@ -259,11 +216,78 @@ def extract_performance_stats_from_soup(soup):
 
 
 
+''' here are the helper functions for error handling the null values '''
+# but we aint really using that rn because the SQL inserts already handle null values. This is just here for a rainy day. what 
+def to_int(value):
+    if value is None or value == "":
+        return None
+    return int(value)
+
+def to_float(value):
+    if value is None or value == "":
+        return None
+    return float(value)
+
+def strip_percent(value):
+    if value is None or value== "":
+        return None
+    return float(value.replace("%", ""))
 
 
+
+
+
+
+
+
+
+''''We are going to write the insert/update scripts. These are going to be the scripts that pushes the data into predefined columns and tables'''
+# def insert_fighter(...)
+# def insert_fighter_performance_stats(...)
 
 
 def insert_fighter(cur, fighter_data):
+
+
+    def parse_int(value):
+        if value is None:
+            return None
+        text = str(value).strip()
+        if text == "":
+            return None
+        match = re.search(r"-?\d+", text.replace(",", ""))
+        return int(match.group()) if match else None
+
+    def parse_float(value):
+        if value is None:
+            return None
+        text = str(value).strip().replace(",", "").replace("%", "")
+        if text == "":
+            return None
+        match = re.search(r"-?\d+(\.\d+)?", text)
+        return float(match.group()) if match else None
+
+
+
+
+
+
+
+    cur.execute(
+        "SELECT fighter_id FROM fighters WHERE name = %s",
+        (fighter_data["name"],)
+        )
+ 
+    existing = cur.fetchone()
+
+
+    if existing:
+        action = "updated"
+    else:
+        action = "inserted"
+ 
+
+
     cur.execute(
         """
         INSERT INTO fighters
@@ -305,11 +329,11 @@ def insert_fighter(cur, fighter_data):
             fighter_data.get("place_of_birth"),
             fighter_data.get("trains_at"),
             fighter_data.get("fighting_style"),
-            int(float(fighter_data["age"])) if fighter_data.get("age") else None,
-            int(float(fighter_data["height"])) if fighter_data.get("height") else None,
-            float(fighter_data["weight"]) if fighter_data.get("weight") else None,
-            int(float(fighter_data["reach"])) if fighter_data.get("reach") else None,
-            float(fighter_data["leg_reach"]) if fighter_data.get("leg_reach") else None,
+            parse_int(fighter_data.get("age")),
+            parse_float(fighter_data.get("height")),
+            parse_float(fighter_data.get("weight")),
+            parse_int(fighter_data.get("reach")),
+            parse_float(fighter_data.get("leg_reach")),
             fighter_data.get("octagon_debut")
         )
     )
@@ -323,9 +347,52 @@ def insert_fighter(cur, fighter_data):
 
 
 
+
 def insert_fighter_performance_stats(cur, fighter_id, stats):
-    cur.execute(
-    """
+
+
+    def safe_int(v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        if s == "":
+            return None
+        m = re.search(r"-?\d+", s.replace(",", ""))
+        return int(m.group()) if m else None
+
+    def safe_float(v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        if s == "":
+            return None
+        s = s.replace(",", "").replace("%", "")
+        m = re.search(r"-?\d+(?:\.\d+)?", s)
+        return float(m.group()) if m else None
+
+    def safe_percent(v):
+        return safe_float(v)
+
+    def parse_time_to_seconds(v):
+        if v is None:
+            return None
+        s = str(v).strip()
+        if s == "":
+            return None
+        if ":" in s:
+            parts = [p for p in s.split(":")]
+            try:
+                nums = [float(x) for x in parts]
+            except ValueError:
+                return None
+            if len(nums) == 2:
+                return nums[0] * 60 + nums[1]
+            if len(nums) == 3:
+                return nums[0] * 3600 + nums[1] * 60 + nums[2]
+        return safe_float(s)
+
+
+    sql = """
     INSERT INTO fighter_performance_stats
     (
         fighter_id,
@@ -401,56 +468,51 @@ def insert_fighter_performance_stats(cur, fighter_id, stats):
         dec_percent = EXCLUDED.dec_percent,
         sub_count = EXCLUDED.sub_count,
         sub_percent = EXCLUDED.sub_percent
-    """,
-    (
+    """
+
+    values = [
         fighter_id,
-        int(stats.get("Sig. Strikes Landed", 0)),
-        int(stats.get("Sig. Strikes Attempted", 0)),
-        int(stats.get("Takedowns Landed", 0)),
-        int(stats.get("Takedowns Attempted", 0)),
-        float(stats.get("Sig. Str. LandedPer Min", 0)),
-        float(stats.get("Sig. Str. AbsorbedPer Min", 0)),
-        float(stats.get("Takedown avgPer 15 Min", 0)),
-        float(stats.get("Submission avgPer 15 Min", 0)),
-        float(stats.get("Sig. Str. Defense", "0").replace("%", "")),
-        float(stats.get("Takedown Defense", "0").replace("%", "")),
-        float(stats.get("Knockdown Avg", 0)),
-        stats.get("Average fight time"),
-        stats.get("standing_count", 0),
-        stats.get("standing_percent", 0),
-        stats.get("clinch_count", 0),
-        stats.get("clinch_percent", 0),
-        stats.get("ground_count", 0),
-        stats.get("ground_percent", 0),
-        stats.get("head_count", 0),
-        stats.get("head_percent", 0),
-        stats.get("body_count", 0),
-        stats.get("body_percent", 0),
-        stats.get("leg_count", 0),
-        stats.get("leg_percent", 0),
-        stats.get("ko/tko_count", 0),
-        stats.get("ko/tko_percent", 0),
-        stats.get("dec_count", 0),
-        stats.get("dec_percent", 0),
-        stats.get("sub_count", 0),
-        stats.get("sub_percent", 0)
-    )
-)
+        safe_int(stats.get("Sig. Strikes Landed")),
+        safe_int(stats.get("Sig. Strikes Attempted")),
+        safe_int(stats.get("Takedowns Landed")),
+        safe_int(stats.get("Takedowns Attempted")),
+        safe_float(stats.get("Sig. Str. LandedPer Min")),
+        safe_float(stats.get("Sig. Str. AbsorbedPer Min")),
+        safe_float(stats.get("Takedown avgPer 15 Min")),
+        safe_float(stats.get("Submission avgPer 15 Min")),
+        safe_percent(stats.get("Sig. Str. Defense")),
+        safe_percent(stats.get("Takedown Defense")),
+        safe_float(stats.get("Knockdown Avg")),
+        parse_time_to_seconds(stats.get("Average fight time")),
+        safe_int(stats.get("standing_count")),
+        safe_percent(stats.get("standing_percent")),
+        safe_int(stats.get("clinch_count")),
+        safe_percent(stats.get("clinch_percent")),
+        safe_int(stats.get("ground_count")),
+        safe_percent(stats.get("ground_percent")),
+        safe_int(stats.get("head_count")),
+        safe_percent(stats.get("head_percent")),
+        safe_int(stats.get("body_count")),
+        safe_percent(stats.get("body_percent")),
+        safe_int(stats.get("leg_count")),
+        safe_percent(stats.get("leg_percent")),
+        safe_int(stats.get("ko/tko_count")),
+        safe_percent(stats.get("ko/tko_percent")),
+        safe_int(stats.get("dec_count")),
+        safe_percent(stats.get("dec_percent")),
+        safe_int(stats.get("sub_count")),
+        safe_percent(stats.get("sub_percent")),
+    ]
 
+    try:
+        cur.execute(sql, values)
+    except Exception as e:
+        print(f"DB insert error for fighter_id={fighter_id}: {e}")
+        print("Offending values:", values)
+        conn.rollback()
+        return None
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return fighter_id
 
 
 # known last page from previous run
@@ -502,6 +564,13 @@ def merge_scrape_and_find_last_page(start_page=1, delay=1):
                 print("Presenting Fighter:", name, "'s", "Stats")
                 print("Extracted bio info:", bio_info)  # debug print
                 print("Extracted performance info:", performance_info)  # debug print
+
+                '''debugginf, wanna see the keys and how they formatted'''
+                # for key in performance_info:
+                #     print(key)
+
+                # for key in bio_info:
+                #     print(key)
             
 
                 if name:
