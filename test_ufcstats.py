@@ -9,6 +9,7 @@ from playwright.async_api import async_playwright
 MAX_CONCURRENT_TABS = 5
 
 
+# Clean and normalize text extracted from BeautifulSoup nodes.
 def _clean_text(value):
     if value is None:
         return None
@@ -17,12 +18,14 @@ def _clean_text(value):
     return str(value).strip()
 
 
+# Normalize label text so HTML labels can be matched consistently.
 def _normalize_label(value):
     if value is None:
         return ""
     return " ".join(str(value).strip().lower().replace(":", "").split())
 
 
+# Extract the value associated with a label by reading the next sibling text content.
 def _extract_label_value(soup, label_text):
     """Find a label and return the next sibling text content."""
     label_text_norm = _normalize_label(label_text)
@@ -41,27 +44,16 @@ def _extract_label_value(soup, label_text):
     return None
 
 
+# Extract the main match metadata for one fight, including result details and labels.
 def extract_general_info(soup):
     """Extract general fight info such as weight class, method, round, and time."""
-    # Weight class:
-    # Located in <i class="b-fight-details__fight-title">
-    # Method:
-    # Located in <i class="b-fight-details__label">Method:</i>
-    # Value is stored as the next sibling text node.
-    # Round:
-    # Located in <i class="b-fight-details__label">Round:</i>
-    # Value is stored as the next sibling text node.
-    # Time:
-    # Located in <i class="b-fight-details__label">Time:</i>
-    # Value is stored as the next sibling text node.
-    # Time format:
-    # Located in <i class="b-fight-details__label">Time format:</i>
-    # Value is stored as the next sibling text node.
-    # Referee:
-    # Located in <i class="b-fight-details__label">Referee:</i>
-    # Value is stored as the next sibling text node.
-    return {
-        "weight_class": _extract_label_value(soup, "Weight class"),
+    # Weight class is stored in the fight-title tag for the main bout summary.
+    fight_details = soup.find("div", class_="b-fight-details__fight") or soup
+    weight_class = _clean_text(fight_details.find("i", class_="b-fight-details__fight-title"))
+
+    # Method, round, time, time format, and referee are stored as label/value pairs.
+    general_info = {
+        "weight_class": weight_class,
         "method": _extract_label_value(soup, "Method"),
         "round": _extract_label_value(soup, "Round"),
         "time": _extract_label_value(soup, "Time"),
@@ -70,18 +62,53 @@ def extract_general_info(soup):
         "details": [],
     }
 
+    # Judge details follow the Details label and are wrapped in text-item entries.
+    details_label = None
+    for label in soup.find_all("i", class_="b-fight-details__label"):
+        if _normalize_label(label.get_text(" ", strip=True)) == "details":
+            details_label = label
+            break
 
+    if details_label is not None:
+        entries = []
+        parent = details_label.parent
+        for entry in parent.find_all("i", class_="b-fight-details__text-item"):
+            judge_name_tag = entry.find("span")
+            judge_name = _clean_text(judge_name_tag) if judge_name_tag else None
+            score_text = _clean_text(entry)
+            if judge_name and score_text:
+                score_text = score_text.replace(judge_name, "", 1).strip()
+            entries.append({
+                "judge": judge_name,
+                "score": score_text or None,
+            })
+        general_info["details"] = entries
+
+    return general_info
+
+
+# Extract fighter-level details for both competitors in the fight card.
 def extract_fighters(soup):
     """Extract fighter-level information for both sides of the fight."""
-    # Fighter 1 and fighter 2 blocks are located in the fight card markup.
-    # Each should expose: name, url, result, kd, sig_str.
-    return {
+    # The fighter totals section is the second section in the fight-details layout.
+    sections = soup.find_all("section", class_="b-fight-details__section js-fight-section")
+    fighter_section = sections[1] if len(sections) > 1 else soup
+
+    fighter_profile_links = set()
+    fighters = {
         "fighter1": {
             "name": None,
             "url": None,
             "result": None,
             "kd": None,
             "sig_str": None,
+            "sig_str_percent": None,
+            "total_str": None,
+            "td": None,
+            "td_percent": None,
+            "sub_att": None,
+            "rev": None,
+            "ctrl": None,
         },
         "fighter2": {
             "name": None,
@@ -89,31 +116,203 @@ def extract_fighters(soup):
             "result": None,
             "kd": None,
             "sig_str": None,
+            "sig_str_percent": None,
+            "total_str": None,
+            "td": None,
+            "td_percent": None,
+            "sub_att": None,
+            "rev": None,
+            "ctrl": None,
         },
+        "fighter_profile_links": fighter_profile_links,
     }
 
+    # Fighter names and profile URLs are stored in left-aligned name cells.
+    name_cells = fighter_section.find_all("td", class_="b-fight-details__table-col l-page_align_left")
+    for index, cell in enumerate(name_cells[:2]):
+        fighter_key = f"fighter{index + 1}"
+        link = cell.find("a", class_="b-link b-link_style_black")
+        if link is not None:
+            fighter_url = link.get("href")
+            if fighter_url:
+                fighter_profile_links.add(fighter_url)
+            fighters[fighter_key]["name"] = _clean_text(link)
+            fighters[fighter_key]["url"] = fighter_url
+        else:
+            fighters[fighter_key]["name"] = _clean_text(cell)
 
+    # The remaining nine stat columns each contain two table-text paragraphs for fighter 1 and fighter 2.
+    stat_labels = [
+        "kd",
+        "sig_str",
+        "sig_str_percent",
+        "total_str",
+        "td",
+        "td_percent",
+        "sub_att",
+        "rev",
+        "ctrl",
+    ]
+
+    for row in fighter_section.find_all("tr"):
+        stat_columns = [
+            col for col in row.find_all("td", class_="b-fight-details__table-col")
+            if "l-page_align_left" not in col.get("class", [])
+        ]
+        if len(stat_columns) < 9:
+            continue
+
+        for index, column in enumerate(stat_columns[:9]):
+            paragraphs = column.find_all("p", class_="b-fight-details__table-text")
+            if len(paragraphs) >= 2:
+                fighters["fighter1"][stat_labels[index]] = _clean_text(paragraphs[0])
+                fighters["fighter2"][stat_labels[index]] = _clean_text(paragraphs[1])
+            elif len(paragraphs) == 1:
+                fighters["fighter1"][stat_labels[index]] = _clean_text(paragraphs[0])
+                fighters["fighter2"][stat_labels[index]] = None
+        break
+
+    return fighters
+
+
+# Extract the totals section for the fight, such as strike and control stats.
 def extract_totals(soup):
     """Extract totals such as significant strikes, takedowns, and control."""
-    # Totals section:
-    # Located in the totals block for the fight.
-    return {}
+    # The total significant strike section uses a table with two table-text paragraphs per stat.
+    totals = {"fighter1": {}, "fighter2": {}}
+    significant_strike_table = soup.find("table", style="width:745px")
+    if significant_strike_table is None:
+        return totals
+
+    stat_labels = [
+        "sig_str",
+        "sig_str_percent",
+        "head",
+        "body",
+        "leg",
+        "distance",
+        "clinch",
+        "ground",
+    ]
+
+    stat_columns = [
+        column for column in significant_strike_table.find_all("td")
+        if column.find_all("p", class_="b-fight-details__table-text")
+    ]
+
+    for index, column in enumerate(stat_columns[:8]):
+        paragraphs = column.find_all("p", class_="b-fight-details__table-text")
+        if len(paragraphs) >= 2:
+            totals["fighter1"][stat_labels[index]] = _clean_text(paragraphs[0])
+            totals["fighter2"][stat_labels[index]] = _clean_text(paragraphs[1])
+
+    return {"significant_strikes": totals}
 
 
+# Extract round-by-round statistics into a list of structured dictionaries.
 def extract_round_stats(soup):
     """Extract round-by-round stats as a list of dictionaries."""
-    # Round stats:
-    # Located in a round-by-round table or repeated section.
-    return []
+    # The round-by-round totals table is the third fight-details table in the page layout.
+    fight_tables = soup.find_all("table", class_="b-fight-details__table js-fight-table")
+    round_table = fight_tables[2] if len(fight_tables) > 2 else None
+
+    # The per-round significant strike section is the fifth section in the fight-details layout.
+    sections = soup.find_all("section", class_="b-fight-details__section js-fight-section")
+    significant_strike_section = sections[4] if len(sections) > 4 else None
+
+    round_rows = []
+    if round_table is not None:
+        round_rows = [
+            row for row in round_table.find_all("tr", class_="b-fight-details__table-row")
+            if row.find_all("td", class_="b-fight-details__table-col")
+        ]
+    elif soup.find_all("tr", class_="b-fight-details__table-row"):
+        round_rows = [
+            row for row in soup.find_all("tr", class_="b-fight-details__table-row")
+            if row.find_all("td")
+        ]
+
+    stat_labels = [
+        "kd",
+        "sig_str",
+        "sig_str_percent",
+        "total_str",
+        "td",
+        "td_percent",
+        "sub_att",
+        "rev",
+        "ctrl",
+    ]
+
+    significant_strike_rows = []
+    if significant_strike_section is not None:
+        significant_strike_rows = [
+            row for row in significant_strike_section.find_all("tr", class_="b-fight-details__table-row")
+            if row.find_all("td")
+        ]
+
+    round_stats = []
+    for index, row in enumerate(round_rows):
+        stat_columns = [
+            column for column in row.find_all("td", class_="b-fight-details__table-col")
+            if "l-page_align_left" not in column.get("class", [])
+        ]
+        round_dict = {
+            "round": index + 1,
+            "fighter1": {},
+            "fighter2": {},
+        }
+
+        for stat_index, column in enumerate(stat_columns[:9]):
+            paragraphs = column.find_all("p", class_="b-fight-details__table-text")
+            if len(paragraphs) >= 2:
+                round_dict["fighter1"][stat_labels[stat_index]] = _clean_text(paragraphs[0])
+                round_dict["fighter2"][stat_labels[stat_index]] = _clean_text(paragraphs[1])
+
+        if index < len(significant_strike_rows):
+            sig_columns = significant_strike_rows[index].find_all("td")
+            sig_labels = [
+                "sig_str",
+                "sig_str_percent",
+                "head",
+                "body",
+                "leg",
+                "distance",
+                "clinch",
+                "ground",
+            ]
+            significant_strikes = {"fighter1": {}, "fighter2": {}}
+            for sig_index, column in enumerate(sig_columns[:8]):
+                paragraphs = column.find_all("p", class_="b-fight-details__table-text")
+                if len(paragraphs) >= 2:
+                    significant_strikes["fighter1"][sig_labels[sig_index]] = _clean_text(paragraphs[0])
+                    significant_strikes["fighter2"][sig_labels[sig_index]] = _clean_text(paragraphs[1])
+            round_dict["significant_strikes"] = significant_strikes
+
+        round_stats.append(round_dict)
+
+    return round_stats
 
 
+# Extract judge score details from any scorecard or judging section.
 def extract_judges(soup):
     """Extract judge score details if present."""
-    # Judge details:
-    # Located in the scorecard / judges section.
-    return []
+    # Judge entries are wrapped in the same text-item tags used for the details section.
+    judges = []
+    for entry in soup.find_all("i", class_="b-fight-details__text-item"):
+        judge_name_tag = entry.find("span")
+        judge_name = _clean_text(judge_name_tag) if judge_name_tag else None
+        score_text = _clean_text(entry)
+        if judge_name and score_text:
+            score_text = score_text.replace(judge_name, "", 1).strip()
+        judges.append({
+            "judge": judge_name,
+            "score": score_text or None,
+        })
+    return judges
 
 
+# Extract page-level metadata for the fight page, such as the title.
 def extract_fight_metadata(soup):
     """Extract fight-page metadata that is not part of the main stat blocks."""
     title = None
@@ -126,6 +325,7 @@ def extract_fight_metadata(soup):
     }
 
 
+# Open a single fight page, parse it, and return one structured fight dictionary.
 async def scrape_fight_page(context, fight_url):
     """Open one fight page, parse it, and return one completed fight dictionary."""
     page = await context.new_page()
@@ -149,6 +349,7 @@ async def scrape_fight_page(context, fight_url):
         await page.close()
 
 
+# Open one event page, gather every fight URL, and return the event payload with fight data.
 async def scrape_individual_event(context, href, headline, date_iso, event_results, semaphore):
     """Open one event page, discover fight URLs, and return one event dictionary."""
     async with semaphore:
@@ -184,6 +385,7 @@ async def scrape_individual_event(context, href, headline, date_iso, event_resul
             await event_page.close()
 
 
+# Scrape the completed events listing and kick off concurrent event processing.
 async def extract_fight_stats_from_UFCstats():
     """Fetch the completed events page and schedule concurrent event scraping."""
     link = "http://ufcstats.com"
