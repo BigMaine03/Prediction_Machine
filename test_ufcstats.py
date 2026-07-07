@@ -18,11 +18,18 @@ def _clean_text(value):
     return str(value).strip()
 
 
+
+
+
+
 # Normalize label text so HTML labels can be matched consistently.
 def _normalize_label(value):
     if value is None:
         return ""
     return " ".join(str(value).strip().lower().replace(":", "").split())
+
+
+
 
 
 # Extract the value associated with a label by reading the next sibling text content.
@@ -44,6 +51,41 @@ def _extract_label_value(soup, label_text):
     return None
 
 
+# Parse the Details section based on the HTML structure beneath the label.
+def _extract_details_section(soup):
+    details_label = None
+    for label in soup.find_all("i", class_="b-fight-details__label"):
+        if _normalize_label(label.get_text(" ", strip=True)) == "details":
+            details_label = label
+            break
+
+    if details_label is None:
+        return {"judges": [], "finish_details": None}
+
+    judges = []
+    finish_details = None
+
+    for sibling in details_label.next_siblings:
+        if getattr(sibling, "name", None) != "i":
+            continue
+
+        if "b-fight-details__text-item" in sibling.get("class", []):
+            judge_name_tag = sibling.find("span")
+            judge_name = _clean_text(judge_name_tag) if judge_name_tag else None
+            score_text = _clean_text(sibling)
+            if judge_name and score_text:
+                score_text = score_text.replace(judge_name, "", 1).strip()
+            if judge_name or score_text:
+                judges.append({
+                    "judge": judge_name,
+                    "score": score_text or None,
+                })
+        elif "b-fight-details__text-item_first" in sibling.get("class", []):
+            finish_details = _clean_text(sibling)
+
+    return {"judges": judges, "finish_details": finish_details}
+
+
 # Extract the main match metadata for one fight, including result details and labels.
 def extract_general_info(soup):
     """Extract general fight info such as weight class, method, round, and time."""
@@ -52,6 +94,7 @@ def extract_general_info(soup):
     weight_class = _clean_text(fight_details.find("i", class_="b-fight-details__fight-title"))
 
     # Method, round, time, time format, and referee are stored as label/value pairs.
+    details_data = _extract_details_section(soup)
     general_info = {
         "weight_class": weight_class,
         "method": _extract_label_value(soup, "Method"),
@@ -59,30 +102,9 @@ def extract_general_info(soup):
         "time": _extract_label_value(soup, "Time"),
         "time_format": _extract_label_value(soup, "Time format"),
         "referee": _extract_label_value(soup, "Referee"),
-        "details": [],
+        "judges": details_data["judges"],
+        "finish_details": details_data["finish_details"],
     }
-
-    # Judge details follow the Details label and are wrapped in text-item entries.
-    details_label = None
-    for label in soup.find_all("i", class_="b-fight-details__label"):
-        if _normalize_label(label.get_text(" ", strip=True)) == "details":
-            details_label = label
-            break
-
-    if details_label is not None:
-        entries = []
-        parent = details_label.parent
-        for entry in parent.find_all("i", class_="b-fight-details__text-item"):
-            judge_name_tag = entry.find("span")
-            judge_name = _clean_text(judge_name_tag) if judge_name_tag else None
-            score_text = _clean_text(entry)
-            if judge_name and score_text:
-                score_text = score_text.replace(judge_name, "", 1).strip()
-            entries.append({
-                "judge": judge_name,
-                "score": score_text or None,
-            })
-        general_info["details"] = entries
 
     return general_info
 
@@ -209,6 +231,9 @@ def extract_totals(soup):
     return {"significant_strikes": totals}
 
 
+
+
+
 # Extract round-by-round statistics into a list of structured dictionaries.
 def extract_round_stats(soup):
     """Extract round-by-round stats as a list of dictionaries."""
@@ -297,19 +322,7 @@ def extract_round_stats(soup):
 # Extract judge score details from any scorecard or judging section.
 def extract_judges(soup):
     """Extract judge score details if present."""
-    # Judge entries are wrapped in the same text-item tags used for the details section.
-    judges = []
-    for entry in soup.find_all("i", class_="b-fight-details__text-item"):
-        judge_name_tag = entry.find("span")
-        judge_name = _clean_text(judge_name_tag) if judge_name_tag else None
-        score_text = _clean_text(entry)
-        if judge_name and score_text:
-            score_text = score_text.replace(judge_name, "", 1).strip()
-        judges.append({
-            "judge": judge_name,
-            "score": score_text or None,
-        })
-    return judges
+    return _extract_details_section(soup)["judges"]
 
 
 # Extract page-level metadata for the fight page, such as the title.
