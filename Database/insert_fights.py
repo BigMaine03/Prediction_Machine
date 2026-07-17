@@ -2,6 +2,8 @@
 
 import json
 
+from numpy import rint
+
 
 def insert_fight(connection, fight_dict, event_id, fighter1_id, fighter2_id):
     """Insert or update a fight and return its fight_id."""
@@ -19,6 +21,7 @@ def insert_fight(connection, fight_dict, event_id, fighter1_id, fighter2_id):
 
     if not fight_url:
         raise ValueError("fight_dict must contain a non-empty metadata['url'] value")
+    
 
     try:
         with connection.cursor() as cursor:
