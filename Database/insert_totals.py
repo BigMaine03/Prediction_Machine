@@ -45,7 +45,7 @@ def insert_totals(connection, fight_id, totals_dict):
                     fighter2_ground,
                     raw_totals
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (fight_id)
                 DO UPDATE SET
                     fighter1_sig_str = EXCLUDED.fighter1_sig_str,
