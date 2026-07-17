@@ -1,3 +1,5 @@
+print("Script started")
+
 """Coordinate the end-to-end ingestion flow for scraper event payloads.
 
 This module intentionally stays at a high level. It does not contain any SQL,
@@ -6,14 +8,18 @@ existing insert helpers in the correct order so the database is populated from
 scraper data in a readable and maintainable way.
 """
 
-from db import get_connection
-from insert_events import insert_event
-from insert_fighters import insert_fighter
-from insert_fights import insert_fight
-from insert_judges import insert_judges
-from insert_metadata import insert_metadata
-from insert_round_stats import insert_round_stats
-from insert_totals import insert_totals
+from Database.db import get_connection
+from Database.insert_events import insert_event
+from Database.insert_fighters import insert_fighter
+from Database.insert_fights import insert_fight
+from Database.insert_judges import insert_judges
+from Database.insert_metadata import insert_metadata
+from Database.insert_round_stats import insert_round_stats
+from Database.insert_totals import insert_totals
+import traceback
+
+
+
 
 
 def _event_label(event_payload, fallback_url):
@@ -114,8 +120,11 @@ def ingest_events(event_results):
                 connection.commit()
                 counters["events"] += 1
                 print("Finished Event")
+
+
             except Exception as exc:
-                print(f"Error processing event {event_label}: {exc}")
+                print(f"\nERROR processing event: {event_label}")
+                traceback.print_exc()
                 try:
                     connection.rollback()
                 except Exception as rollback_error:
@@ -124,10 +133,6 @@ def ingest_events(event_results):
     finally:
         connection.close()
 
-    print(f"Events Processed: {counters['events']}")
-    print(f"Fights Inserted: {counters['fights']}")
-    print(f"Fighters Inserted: {counters['fighters']}")
-    print(f"Round Stats Inserted: {counters['round_stats']}")
-    print(f"Judge Scores Inserted: {counters['judge_scores']}")
-
     return counters
+
+
