@@ -51,7 +51,7 @@ def insert_round_stats(connection, fight_id, round_stats_list):
                         fighter2_ctrl,
                         raw_round
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (fight_id, round_number)
                     DO UPDATE SET
                         fighter1_kd = EXCLUDED.fighter1_kd,
