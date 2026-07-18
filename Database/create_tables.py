@@ -8,10 +8,13 @@ Usage: pass an open psycopg2 connection object to `create_tables(connection)`.
 
 Design goals implemented here:
 - Keep the scraper → DB contract stable: DB adapts to the scraper output shape.
-- Normalize entities (events, fights, fighters, rounds, totals, judges, metadata).
+- Normalize entities (events, fights, fighters, rounds, totals, judges, metadata,
+  fighter bio stats, fighter performance stats).
 - Provide JSONB columns for flexible extension while keeping important columns typed.
-- Use ON DELETE CASCADE for children tied to parent lifecycle (event -> fights -> rounds/totals/judges).
-- Use ON DELETE SET NULL for fighter references so removing a fighter record does not cascade-delete historic fights.
+- Use ON DELETE CASCADE for children tied to parent lifecycle
+  (event -> fights -> rounds/totals/judges; fighter -> bio/performance stats).
+- Use ON DELETE SET NULL for fighter references on fights so removing a fighter
+  record does not cascade-delete historic fights.
 
 Note: This module only creates tables. It intentionally avoids any INSERT logic.
 """
@@ -61,10 +64,12 @@ def create_tables(connection):
       succeed. On error it will rollback and re-raise the exception.
 
     Mapping to scraper output (stable contract):
-    - The scraper returns `event` dictionaries containing `fights` lists.
-      Each fight contains `general_info`, `fighters`, `totals`, `round_stats`,
-      `judges`, and `metadata`. The SQL schema below maps those top-level keys
-      to normalized tables described in comments above each CREATE statement.
+    - The UFCStats fight scraper returns `event` dictionaries containing `fights`
+      lists. Each fight contains `general_info`, `fighters`, `totals`,
+      `round_stats`, `judges`, and `metadata`.
+    - The ufc.com fighter scraper returns `bio_stats` and `performance_stats`
+      dicts per fighter profile; those map to fighter_bio and
+      fighter_performance_stats (1:1 with fighters).
     """
 
     sql_statements = []
@@ -159,7 +164,7 @@ def create_tables(connection):
     sql_statements.append("""
     CREATE TABLE IF NOT EXISTS fight_totals (
         fight_total_id SERIAL PRIMARY KEY,
-        fight_id INTEGER NOT NULL REFERENCES fights(fight_id) ON DELETE CASCADE,
+        fight_id INTEGER UNIQUE NOT NULL REFERENCES fights(fight_id) ON DELETE CASCADE,
 
         -- Normalized columns for the common significant striking totals
         fighter1_sig_str TEXT,
@@ -237,6 +242,91 @@ def create_tables(connection):
     );
     """)
 
+    # Fighter bio stats
+    # Maps to `bio_stats` from scrape_fighter_bio_and_performance_stats.py
+    # (`extract_bio_from_soup`). One row per fighter (1:1 with fighters).
+    # Keys from the scraper are lowercased with spaces -> underscores, e.g.
+    # place_of_birth, octagon_debut, leg_reach.
+    sql_statements.append("""
+    CREATE TABLE IF NOT EXISTS fighter_bio (
+        fighter_bio_stat_id SERIAL PRIMARY KEY,
+        fighter_id INTEGER UNIQUE NOT NULL REFERENCES fighters(fighter_id) ON DELETE CASCADE,
+
+        -- Normalized columns from extract_bio_from_soup / insert_fighter bio fields
+        status TEXT,
+        place_of_birth TEXT,
+        trains_at TEXT,
+        fighting_style TEXT,
+        age INTEGER,
+        height DOUBLE PRECISION,
+        weight DOUBLE PRECISION,
+        reach INTEGER,
+        leg_reach DOUBLE PRECISION,
+        octagon_debut DATE,
+
+        -- Raw JSON backup of the full bio_stats mapping from the scraper
+        raw_bio JSONB,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+    );
+    """)
+
+    # Fighter performance stats
+    # Maps to `performance_stats` from scrape_fighter_bio_and_performance_stats.py
+    # (`extract_performance_stats_from_soup` + insert_fighter_performance_stats).
+    # One row per fighter (1:1 with fighters). Column names match the insert
+    # helper already written in that scraper module.
+    sql_statements.append("""
+    CREATE TABLE IF NOT EXISTS fighter_performance_stats (
+        fighter_performance_stat_id SERIAL PRIMARY KEY,
+        fighter_id INTEGER UNIQUE NOT NULL REFERENCES fighters(fighter_id) ON DELETE CASCADE,
+
+        -- Volume / accuracy style counts
+        sig_strikes_landed INTEGER,
+        sig_strikes_attempted INTEGER,
+        takedowns_landed INTEGER,
+        takedowns_attempted INTEGER,
+
+        -- Rate and defense metrics
+        sig_strikes_landed_per_min DOUBLE PRECISION,
+        sig_strikes_absorbed_per_min DOUBLE PRECISION,
+        takedown_avg_per_15_min DOUBLE PRECISION,
+        submission_avg_per_15_min DOUBLE PRECISION,
+        sig_strikes_defense DOUBLE PRECISION,
+        takedown_defense DOUBLE PRECISION,
+        knockdown_avg DOUBLE PRECISION,
+        -- Stored as seconds (insert helper converts "M:SS" via parse_time_to_seconds)
+        average_fight_time DOUBLE PRECISION,
+
+        -- Strike position mix
+        standing_count INTEGER,
+        standing_percent DOUBLE PRECISION,
+        clinch_count INTEGER,
+        clinch_percent DOUBLE PRECISION,
+        ground_count INTEGER,
+        ground_percent DOUBLE PRECISION,
+
+        -- Strike target mix
+        head_count INTEGER,
+        head_percent DOUBLE PRECISION,
+        body_count INTEGER,
+        body_percent DOUBLE PRECISION,
+        leg_count INTEGER,
+        leg_percent DOUBLE PRECISION,
+
+        -- Win method mix
+        ko_count INTEGER,
+        ko_percent DOUBLE PRECISION,
+        dec_count INTEGER,
+        dec_percent DOUBLE PRECISION,
+        sub_count INTEGER,
+        sub_percent DOUBLE PRECISION,
+
+        -- Raw JSON backup of the full performance_stats mapping from the scraper
+        raw_performance JSONB,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+    );
+    """)
+
     cursor = connection.cursor()
     try:
         for stmt in sql_statements:
@@ -266,6 +356,14 @@ def create_tables(connection):
 
         if _table_exists(connection, "fights") and _column_exists(connection, "fights", "event_id"):
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_fights_event_id ON fights(event_id)")
+
+        if _table_exists(connection, "fighter_bio") and _column_exists(connection, "fighter_bio", "fighter_id"):
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_fighter_bio_fighter_id ON fighter_bio(fighter_id)")
+
+        if _table_exists(connection, "fighter_performance_stats") and _column_exists(connection, "fighter_performance_stats", "fighter_id"):
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_fighter_performance_stats_fighter_id ON fighter_performance_stats(fighter_id)"
+            )
 
         # Commit once all CREATE TABLE statements have run successfully.
         connection.commit()
