@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 from urllib.parse import urljoin
 
+import re
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 
@@ -287,79 +288,82 @@ def extract_totals(soup):
 
 
 
+def _get_table_header_text(table):
+    """Return lowercased header text for a table, checking <thead> first."""
+    header = table.find("thead")
+    if header is None:
+        header = table.find("tr")  # fallback: first row often IS the header row
+    return (_clean_text(header) or "").lower()
+
+
+
+
 
 
 # Extract round-by-round statistics into a list of structured dictionaries.
 def extract_round_stats(soup):
     """Extract round-by-round stats as a list of dictionaries."""
-    # The round-by-round totals table is the third fight-details table in the page layout.
-    fight_tables = soup.find_all("table", class_="b-fight-details__table js-fight-table")
-    round_table = fight_tables[2] if len(fight_tables) > 2 else None
+    candidate_tables = soup.find_all("table", class_="b-fight-details__table js-fight-table")
 
-    # The per-round significant strike section is the fifth section in the fight-details layout.
-    sections = soup.find_all("section", class_="b-fight-details__section js-fight-section")
-    significant_strike_section = sections[4] if len(sections) > 4 else None
+    round_totals_table = None
+    significant_strike_table = None
+    for table in candidate_tables:
+        header_row = table.find("tr")
+        header_text = header_row.get_text(" ", strip=True).lower() if header_row else ""
+        if "ctrl" in header_text:
+            round_totals_table = table
+        elif "head" in header_text and "body" in header_text and "leg" in header_text:
+            significant_strike_table = table
 
-    round_rows = []
-    if round_table is not None:
-        round_rows = [
-            row for row in round_table.find_all("tr", class_="b-fight-details__table-row")
-            if row.find_all("td", class_="b-fight-details__table-col")
-        ]
-    elif soup.find_all("tr", class_="b-fight-details__table-row"):
-        round_rows = [
-            row for row in soup.find_all("tr", class_="b-fight-details__table-row")
-            if row.find_all("td")
-        ]
+    def _rows_by_round(table):
+        """Walk a per-round table's rows in order, tracking the current round
+        via standalone 'Round N' label rows, and return {round_number: [td,...]}."""
+        rounds = {}
+        if table is None:
+            return rounds
 
-    stat_labels = [
-        "kd",
-        "sig_str",
-        "sig_str_percent",
-        "total_str",
-        "td",
-        "td_percent",
-        "sub_att",
-        "rev",
-        "ctrl",
-    ]
+        current_round = None
+        for row in table.find_all("tr"):
+            td_cells = row.find_all("td", class_="b-fight-details__table-col") or row.find_all("td")
+            if td_cells:
+                if current_round is not None:
+                    rounds[current_round] = td_cells
+                continue
 
-    significant_strike_rows = []
-    if significant_strike_section is not None:
-        significant_strike_rows = [
-            row for row in significant_strike_section.find_all("tr", class_="b-fight-details__table-row")
-            if row.find_all("td")
-        ]
+            th_cells = row.find_all("th")
+            if len(th_cells) == 1:
+                match = re.search(r"round\s*(\d+)", th_cells[0].get_text(strip=True), re.IGNORECASE)
+                if match:
+                    current_round = int(match.group(1))
+            # header row (multiple <th>) falls through and is ignored
+
+        return rounds
+
+    round_totals_rows = _rows_by_round(round_totals_table)
+    significant_strike_rows = _rows_by_round(significant_strike_table)
+
+    stat_labels = ["kd", "sig_str", "sig_str_percent", "total_str",
+                   "td", "td_percent", "sub_att", "rev", "ctrl"]
+    sig_labels = ["sig_str", "sig_str_percent", "head", "body",
+                  "leg", "distance", "clinch", "ground"]
 
     round_stats = []
-    for index, row in enumerate(round_rows):
+    for round_number in sorted(round_totals_rows.keys()):
         stat_columns = [
-            column for column in row.find_all("td", class_="b-fight-details__table-col")
-            if "l-page_align_left" not in column.get("class", [])
+            c for c in round_totals_rows[round_number]
+            if "l-page_align_left" not in c.get("class", [])
         ]
-        round_dict = {
-            "round": index + 1,
-            "fighter1": {},
-            "fighter2": {},
-        }
-
+        round_dict = {"round": round_number, "fighter1": {}, "fighter2": {}}
         for stat_index, column in enumerate(stat_columns[:9]):
             paragraphs = column.find_all("p", class_="b-fight-details__table-text")
             if len(paragraphs) >= 2:
                 round_dict["fighter1"][stat_labels[stat_index]] = _clean_text(paragraphs[0])
                 round_dict["fighter2"][stat_labels[stat_index]] = _clean_text(paragraphs[1])
 
-        if index < len(significant_strike_rows):
-            sig_columns = significant_strike_rows[index].find_all("td")
-            sig_labels = [
-                "sig_str",
-                "sig_str_percent",
-                "head",
-                "body",
-                "leg",
-                "distance",
-                "clinch",
-                "ground",
+        if round_number in significant_strike_rows:
+            sig_columns = [
+                c for c in significant_strike_rows[round_number]
+                if "l-page_align_left" not in c.get("class", [])
             ]
             significant_strikes = {"fighter1": {}, "fighter2": {}}
             for sig_index, column in enumerate(sig_columns[:8]):
@@ -372,6 +376,9 @@ def extract_round_stats(soup):
         round_stats.append(round_dict)
 
     return round_stats
+
+
+
 
 
 # Extract judge score details from any scorecard or judging section.
