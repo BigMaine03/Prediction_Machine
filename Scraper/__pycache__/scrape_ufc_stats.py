@@ -10,6 +10,8 @@ from playwright.async_api import async_playwright
 MAX_CONCURRENT_TABS = 5
 
 
+
+
 # Clean and normalize text extracted from BeautifulSoup nodes.
 def _clean_text(value):
     if value is None:
@@ -174,50 +176,70 @@ def extract_fighters(soup):
     fighter_profile_links = set()
     fighters = {
         "fighter1": {
-            "name": "",
-            "url": None,
-            "result": None,
-            "kd": None,
-            "sig_str": None,
-            "sig_str_percent": None,
-            "total_str": None,
-            "td": None,
-            "td_percent": None,
-            "sub_att": None,
-            "rev": None,
-            "ctrl": None,
+            "name": "", "url": None, "result": None, "kd": None,
+            "sig_str": None, "sig_str_percent": None, "total_str": None,
+            "td": None, "td_percent": None, "sub_att": None, "rev": None, "ctrl": None,
         },
         "fighter2": {
-            "name": None,
-            "url": None,
-            "result": None,
-            "kd": None,
-            "sig_str": None,
-            "sig_str_percent": None,
-            "total_str": None,
-            "td": None,
-            "td_percent": None,
-            "sub_att": None,
-            "rev": None,
-            "ctrl": None,
+            "name": None, "url": None, "result": None, "kd": None,
+            "sig_str": None, "sig_str_percent": None, "total_str": None,
+            "td": None, "td_percent": None, "sub_att": None, "rev": None, "ctrl": None,
         },
         "fighter_profile_links": fighter_profile_links,
     }
 
-    # Fighter names and profile URLs are stored in left-aligned name cells.
+
+
+  # Both fighters' names/links live inside ONE cell as two stacked <p><a>
+    # pairs -- that same cell shape is duplicated once per stat table on the
+    # page, which is why the page-wide selector below matches multiple
+    # cells. Take only the FIRST one; any of them carries the same two
+    # fighters in the same order.
+
+
     name_cells = soup.select("td.b-fight-details__table-col.l-page_align_left")
-    print(len(name_cells))
-    for index, cell in enumerate(name_cells[:2]):
-        fighter_key = f"fighter{index + 1}" 
-        link = cell.find("a", class_="b-link b-link_style_black")
-        if link is not None:
-            fighter_url = link.get("href")
-            if fighter_url:
-                fighter_profile_links.add(fighter_url)
-            fighters[fighter_key]["name"] = _clean_text(link)
-            fighters[fighter_key]["url"] = fighter_url
-        else:
-            fighters[fighter_key]["name"] = _clean_text(cell)
+    if name_cells:
+        name_cell = name_cells[0]
+        name_links = name_cell.find_all("a", class_="b-link b-link_style_black")
+        name_paragraphs = name_cell.find_all("p", class_="b-fight-details__table-text")
+
+        for index in range(2):
+            fighter_key = f"fighter{index + 1}"
+            if index < len(name_links):
+                link = name_links[index]
+                fighter_url = link.get("href")
+                if fighter_url:
+                    fighter_profile_links.add(fighter_url)
+                fighters[fighter_key]["name"] = _clean_text(link)
+                fighters[fighter_key]["url"] = fighter_url
+            elif index < len(name_paragraphs):
+                fighters[fighter_key]["name"] = _clean_text(name_paragraphs[index])
+
+
+
+
+
+
+
+    # name_cells = soup.select("td.b-fight-details__table-col.l-page_align_left")
+    # for index, cell in enumerate(name_cells[:2]):
+    #     fighter_key = f"fighter{index + 1}" 
+    #     link = cell.find("a", class_="b-link b-link_style_black")
+    #     if link is not None:
+    #         fighter_url = link.get("href")
+    #         if fighter_url:
+    #             fighter_profile_links.add(fighter_url)
+    #         fighters[fighter_key]["name"] = _clean_text(link)
+    #         fighters[fighter_key]["url"] = fighter_url
+    #     else:
+    #         fighters[fighter_key]["name"] = _clean_text(cell)
+
+
+
+
+
+
+
 
     # The remaining nine stat columns each contain two table-text paragraphs for fighter 1 and fighter 2.
     stat_labels = [
@@ -258,7 +280,18 @@ def extract_totals(soup):
     """Extract totals such as significant strikes, takedowns, and control."""
     # The total significant strike section uses a table with two table-text paragraphs per stat.
     totals = {"fighter1": {}, "fighter2": {}}
-    significant_strike_table = soup.find("table", style="width:745px")
+
+    significant_strike_table = None
+    for table in soup.find_all("table"):
+        classes = table.get("class") or []
+        if "js-fight-table" in classes:
+            continue
+        header_row = table.find("tr")
+        header_text = header_row.get_text(" ", strip=True).lower() if header_row else ""
+        if "head" in header_text and "body" in header_text and "leg" in header_text:
+            significant_strike_table = table
+            break
+
     if significant_strike_table is None:
         return totals
 
@@ -276,6 +309,7 @@ def extract_totals(soup):
     stat_columns = [
         column for column in significant_strike_table.find_all("td")
         if column.find_all("p", class_="b-fight-details__table-text")
+        and "l-page_align_left" not in (column.get("class") or [])
     ]
 
     for index, column in enumerate(stat_columns[:8]):
@@ -285,6 +319,54 @@ def extract_totals(soup):
             totals["fighter2"][stat_labels[index]] = _clean_text(paragraphs[1])
 
     return {"significant_strikes": totals}
+
+
+
+
+
+
+
+
+
+
+
+
+
+'''below is old version of extract_totals() that was replaced by the above version, which is more robust to changes in the HTML structure.'''
+    # significant_strike_table = soup.find("table", style="width:745px")
+    # if significant_strike_table is None:
+    #     return totals
+
+    # stat_labels = [
+    #     "sig_str",
+    #     "sig_str_percent",
+    #     "head",
+    #     "body",
+    #     "leg",
+    #     "distance",
+    #     "clinch",
+    #     "ground",
+    # ]
+
+    # stat_columns = [
+    #     column for column in significant_strike_table.find_all("td")
+    #     if column.find_all("p", class_="b-fight-details__table-text")
+    # ]
+
+    # for index, column in enumerate(stat_columns[:8]):
+    #     paragraphs = column.find_all("p", class_="b-fight-details__table-text")
+    #     if len(paragraphs) >= 2:
+    #         totals["fighter1"][stat_labels[index]] = _clean_text(paragraphs[0])
+    #         totals["fighter2"][stat_labels[index]] = _clean_text(paragraphs[1])
+
+    # return {"significant_strikes": totals}
+
+
+
+
+
+
+
 
 
 
@@ -381,6 +463,45 @@ def extract_round_stats(soup):
 
 
 
+
+
+def extract_fight_result(soup):
+    """Extract each fighter's win/loss/draw/no-contest status from the fight
+    header. Returns a dict keyed by fighter URL (the same URLs extract_fighters
+    produces) so the result can be safely matched to fighter1/fighter2 by
+    identity, not by document order or position.
+
+    UFCStats marks status via a colored <i class="b-fight-details__person-status">
+    tag ("W", "L", "D", or "NC") sitting alongside the fighter's name/link inside
+    a <div class="b-fight-details__person"> block -- one block per fighter.
+    """
+    results = {}
+    status_tags = soup.find_all("i", class_="b-fight-details__person-status")
+
+    for status_tag in status_tags:
+        person_block = status_tag.find_parent(class_="b-fight-details__person")
+        if person_block is None:
+            continue
+
+        link = person_block.find("a", class_="b-fight-details__person-link")
+        if link is None:
+            continue
+
+        fighter_url = link.get("href")
+        status_text = status_tag.get_text(strip=True).upper()
+
+        if fighter_url:
+            results[fighter_url] = status_text
+
+    return results
+
+
+
+
+
+
+
+
 # Extract judge score details from any scorecard or judging section.
 def extract_judges(soup):
     """Extract judge score details if present."""
@@ -419,6 +540,7 @@ async def scrape_fight_page(context, fight_url):
             "round_stats": extract_round_stats(soup),
             "judges": extract_judges(soup),
             "metadata": metadata,
+            "fight_result": extract_fight_result(soup),
         }
     finally:
         await page.close()
