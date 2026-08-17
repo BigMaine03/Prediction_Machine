@@ -249,7 +249,7 @@ def create_tables(connection):
     # place_of_birth, octagon_debut, leg_reach.
     sql_statements.append("""
     CREATE TABLE IF NOT EXISTS fighter_bio (
-        fighter_bio_stat_id SERIAL PRIMARY KEY,
+        fighter_bio_id SERIAL PRIMARY KEY,
         fighter_id INTEGER UNIQUE NOT NULL REFERENCES fighters(fighter_id) ON DELETE CASCADE,
 
         -- Normalized columns from extract_bio_from_soup / insert_fighter bio fields
