@@ -4,24 +4,19 @@ Current status:
 ✓ Detects last page
 ✓ Scrapes all fighter profile URLs
 ✓ Stores unique URLs in a set
-
-Next task:
-- Build scrape_fighter_profile(url)
-- Extract:
-    name
-    height
-    reach
-    stance
-    weight_class
-- Insert into PostgreSQL
+✓ Extracts bio + performance stats
+✓ Inserts fighter / fighter_bio_stats / fighter_performance_stats via Database layer
 """
 import re
 import requests
 from bs4 import BeautifulSoup
-import psycopg
-import pandas
 import time
 from datetime import datetime
+
+from Database.db import get_connection
+from Database.insert_fighters import insert_fighter
+from Database.insert_fighter_bio import insert_fighter_bio
+from Database.insert_fighter_performance_stats import insert_fighter_performance_stats
 
 
 def safe_get(url, max_retries=4, backoff_factor=1.5, timeout=30):
@@ -40,7 +35,6 @@ def safe_get(url, max_retries=4, backoff_factor=1.5, timeout=30):
             attempt += 1
             continue
 
-        # If server error, retry
         if 500 <= resp.status_code < 600:
             wait = backoff_factor * (2 ** attempt)
             print(f"safe_get: server error {resp.status_code} for {url!r} (attempt {attempt+1}/{max_retries}); retrying in {wait:.1f}s")
@@ -48,7 +42,6 @@ def safe_get(url, max_retries=4, backoff_factor=1.5, timeout=30):
             attempt += 1
             continue
 
-        # Non-retryable status codes: return None for anything that's not 200
         if resp.status_code != 200:
             print(f"safe_get: unexpected status {resp.status_code} for {url!r}; skipping")
             return None
@@ -59,18 +52,8 @@ def safe_get(url, max_retries=4, backoff_factor=1.5, timeout=30):
     return None
 
 
-
-
-
 # connect to the database maine
-conn = psycopg.connect(
-    dbname="manas_ufc_pred_machine",
-    user="Manas"
-)
-
-cur = conn.cursor()
-
-
+connection = get_connection()
 
 
 # hardcoding base URL and listing URL pattern for pagination iteration
@@ -92,11 +75,6 @@ def get_fighter_name_from_soup(soup):
     else:
         Name_tag = (Fighter_Name_section.find("h1", class_="hero-profile__name")).get_text(strip=True)
         return Name_tag
-
-
-
-
-
 
 
 '''this function extracts all the Bio data such height, weight, age and shit like that'''
@@ -145,10 +123,6 @@ def extract_bio_from_soup(soup):
     return bio_stats
 
 
-
-
-
-
 '''this function extracts the performance stats from the carousel section of the fighter profile page, returning a list of dictionaries with label-value pairs for each stat.'''
 def extract_performance_stats_from_soup(soup):
     carousel = soup.find(
@@ -164,7 +138,6 @@ def extract_performance_stats_from_soup(soup):
 
     two_column = carousel.find_all('div', class_='stats-records stats-records--two-column')
     three_column = carousel.find_all('div', class_='stats-records stats-records--three-column')
-
 
 
 # runner for two_column
@@ -251,307 +224,6 @@ def extract_performance_stats_from_soup(soup):
     return performance_stats
 
 
-
-
-''' here are the helper functions for error handling the null values '''
-# but we aint really using that rn because the SQL inserts already handle null values. This is just here for a rainy day. what 
-def to_int(value):
-    if value is None or value == "":
-        return None
-    return int(value)
-
-def to_float(value):
-    if value is None or value == "":
-        return None
-    return float(value)
-
-def strip_percent(value):
-    if value is None or value== "":
-        return None
-    return float(value.replace("%", ""))
-
-
-
-
-
-
-
-
-
-''''We are going to write the insert/update scripts. These are going to be the scripts that pushes the data into predefined columns and tables'''
-# def insert_fighter(...)
-# def insert_fighter_performance_stats(...)
-
-
-def insert_fighter(cur, fighter_data):
-
-
-    def parse_int(value):
-        if value is None:
-            return None
-        text = str(value).strip()
-        if text == "":
-            return None
-        match = re.search(r"-?\d+", text.replace(",", ""))
-        return int(match.group()) if match else None
-
-    def parse_float(value):
-        if value is None:
-            return None
-        text = str(value).strip().replace(",", "").replace("%", "")
-        if text == "":
-            return None
-        match = re.search(r"-?\d+(\.\d+)?", text)
-        return float(match.group()) if match else None
-
-
-
-
-
-
-
-    cur.execute(
-        "SELECT fighter_id FROM fighters WHERE name = %s",
-        (fighter_data["name"],)
-        )
- 
-    existing = cur.fetchone()
-
-
-    if existing:
-        action = "updated"
-    else:
-        action = "inserted"
- 
-
-
-    cur.execute(
-        """
-        INSERT INTO fighters
-        (
-            name,
-            status,
-            place_of_birth,
-            trains_at,
-            fighting_style,
-            age,
-            height,
-            weight,
-            reach,
-            leg_reach,
-            octagon_debut
-        )
-        VALUES
-        (
-            %s,%s,%s,%s,%s,
-            %s,%s,%s,%s,%s,%s
-        )
-        ON CONFLICT (name)
-        DO UPDATE SET
-            status = EXCLUDED.status,
-            place_of_birth = EXCLUDED.place_of_birth,
-            trains_at = EXCLUDED.trains_at,
-            fighting_style = EXCLUDED.fighting_style,
-            age = EXCLUDED.age,
-            height = EXCLUDED.height,
-            weight = EXCLUDED.weight,
-            reach = EXCLUDED.reach,
-            leg_reach = EXCLUDED.leg_reach,
-            octagon_debut = EXCLUDED.octagon_debut
-        RETURNING fighter_id
-        """,
-        (
-            fighter_data.get("name"),
-            fighter_data.get("status"),
-            fighter_data.get("place_of_birth"),
-            fighter_data.get("trains_at"),
-            fighter_data.get("fighting_style"),
-            parse_int(fighter_data.get("age")),
-            parse_float(fighter_data.get("height")),
-            parse_float(fighter_data.get("weight")),
-            parse_int(fighter_data.get("reach")),
-            parse_float(fighter_data.get("leg_reach")),
-            fighter_data.get("octagon_debut")
-        )
-    )
-
-    fighter_id = cur.fetchone()[0]
-    return fighter_id
-
-
-
-
-
-
-
-
-def insert_fighter_performance_stats(cur, fighter_id, stats):
-
-
-    def safe_int(v):
-        if v is None:
-            return None
-        s = str(v).strip()
-        if s == "":
-            return None
-        m = re.search(r"-?\d+", s.replace(",", ""))
-        return int(m.group()) if m else None
-
-    def safe_float(v):
-        if v is None:
-            return None
-        s = str(v).strip()
-        if s == "":
-            return None
-        s = s.replace(",", "").replace("%", "")
-        m = re.search(r"-?\d+(?:\.\d+)?", s)
-        return float(m.group()) if m else None
-
-    def safe_percent(v):
-        return safe_float(v)
-
-    def parse_time_to_seconds(v):
-        if v is None:
-            return None
-        s = str(v).strip()
-        if s == "":
-            return None
-        if ":" in s:
-            parts = [p for p in s.split(":")]
-            try:
-                nums = [float(x) for x in parts]
-            except ValueError:
-                return None
-            if len(nums) == 2:
-                return nums[0] * 60 + nums[1]
-            if len(nums) == 3:
-                return nums[0] * 3600 + nums[1] * 60 + nums[2]
-        return safe_float(s)
-
-
-    sql = """
-    INSERT INTO fighter_performance_stats
-    (
-        fighter_id,
-        sig_strikes_landed,
-        sig_strikes_attempted,
-        takedowns_landed,
-        takedowns_attempted,
-        sig_strikes_landed_per_min,
-        sig_strikes_absorbed_per_min,
-        takedown_avg_per_15_min,
-        submission_avg_per_15_min,
-        sig_strikes_defense,
-        takedown_defense,
-        knockdown_avg,
-        average_fight_time,
-        standing_count,
-        standing_percent,
-        clinch_count,
-        clinch_percent,
-        ground_count,
-        ground_percent,
-        head_count,
-        head_percent,
-        body_count,
-        body_percent,
-        leg_count,
-        leg_percent,
-        ko_count,
-        ko_percent,
-        dec_count,
-        dec_percent,
-        sub_count,
-        sub_percent
-    )
-
-    VALUES
-    (
-        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,
-        %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s
-    )
-
-    ON CONFLICT (fighter_id)
-
-    DO UPDATE SET
-        sig_strikes_landed = EXCLUDED.sig_strikes_landed,
-        sig_strikes_attempted = EXCLUDED.sig_strikes_attempted,
-        takedowns_landed = EXCLUDED.takedowns_landed,
-        takedowns_attempted = EXCLUDED.takedowns_attempted,
-        sig_strikes_landed_per_min = EXCLUDED.sig_strikes_landed_per_min,
-        sig_strikes_absorbed_per_min = EXCLUDED.sig_strikes_absorbed_per_min,
-        takedown_avg_per_15_min = EXCLUDED.takedown_avg_per_15_min,
-        submission_avg_per_15_min = EXCLUDED.submission_avg_per_15_min,
-        sig_strikes_defense = EXCLUDED.sig_strikes_defense,
-        takedown_defense = EXCLUDED.takedown_defense,
-        knockdown_avg = EXCLUDED.knockdown_avg,
-        average_fight_time = EXCLUDED.average_fight_time,
-        standing_count = EXCLUDED.standing_count,
-        standing_percent = EXCLUDED.standing_percent,
-        clinch_count = EXCLUDED.clinch_count,
-        clinch_percent = EXCLUDED.clinch_percent,
-        ground_count = EXCLUDED.ground_count,
-        ground_percent = EXCLUDED.ground_percent,
-        head_count = EXCLUDED.head_count,
-        head_percent = EXCLUDED.head_percent,
-        body_count = EXCLUDED.body_count,
-        body_percent = EXCLUDED.body_percent,
-        leg_count = EXCLUDED.leg_count,
-        leg_percent = EXCLUDED.leg_percent,
-        ko_count = EXCLUDED.ko_count,
-        ko_percent = EXCLUDED.ko_percent,
-        dec_count = EXCLUDED.dec_count,
-        dec_percent = EXCLUDED.dec_percent,
-        sub_count = EXCLUDED.sub_count,
-        sub_percent = EXCLUDED.sub_percent
-    """
-
-    values = [
-        fighter_id,
-        safe_int(stats.get("Sig. Strikes Landed")),
-        safe_int(stats.get("Sig. Strikes Attempted")),
-        safe_int(stats.get("Takedowns Landed")),
-        safe_int(stats.get("Takedowns Attempted")),
-        safe_float(stats.get("Sig. Str. LandedPer Min")),
-        safe_float(stats.get("Sig. Str. AbsorbedPer Min")),
-        safe_float(stats.get("Takedown avgPer 15 Min")),
-        safe_float(stats.get("Submission avgPer 15 Min")),
-        safe_percent(stats.get("Sig. Str. Defense")),
-        safe_percent(stats.get("Takedown Defense")),
-        safe_float(stats.get("Knockdown Avg")),
-        parse_time_to_seconds(stats.get("Average fight time")),
-        safe_int(stats.get("standing_count")),
-        safe_percent(stats.get("standing_percent")),
-        safe_int(stats.get("clinch_count")),
-        safe_percent(stats.get("clinch_percent")),
-        safe_int(stats.get("ground_count")),
-        safe_percent(stats.get("ground_percent")),
-        safe_int(stats.get("head_count")),
-        safe_percent(stats.get("head_percent")),
-        safe_int(stats.get("body_count")),
-        safe_percent(stats.get("body_percent")),
-        safe_int(stats.get("leg_count")),
-        safe_percent(stats.get("leg_percent")),
-        safe_int(stats.get("ko/tko_count")),
-        safe_percent(stats.get("ko/tko_percent")),
-        safe_int(stats.get("dec_count")),
-        safe_percent(stats.get("dec_percent")),
-        safe_int(stats.get("sub_count")),
-        safe_percent(stats.get("sub_percent")),
-    ]
-
-    try:
-        cur.execute(sql, values)
-    except Exception as e:
-        print(f"DB insert error for fighter_id={fighter_id}: {e}")
-        print("Offending values:", values)
-        conn.rollback()
-        return None
-
-    return fighter_id
-
-
 # known last page from previous run
 KNOWN_LAST_PAGE = 286
 # function to merge scraping and last page detection in one pass
@@ -611,20 +283,20 @@ def merge_scrape_and_find_last_page(start_page=1, delay=1):
             
 
                 if name:
-                    fighter_data = {"name": name, **bio_info}
+                    fighter_dict = {"fighter_name": name, "fighter_url": full_url}
                     print(f"Processing fighter #{counter}: {name}")
                     try:
                         print("ABOUT TO INSERT:", name)
-                        fighter_id = insert_fighter(cur, fighter_data)
+                        fighter_id = insert_fighter(connection, fighter_dict)
                         print("fighter_id returned:", fighter_id)
                         print("INSERT SUCCESS")
-                        insert_fighter_performance_stats(cur, fighter_id, performance_info)
+                        insert_fighter_bio(connection, fighter_id, bio_info)
+                        print("BIO INSERT SUCCESS")
+                        insert_fighter_performance_stats(connection, fighter_id, performance_info)
                         print("PERFORMANCE INSERT SUCCESS")
-                        conn.commit()
                         print(f"Saved fighter {name} as fighter_id={fighter_id}")
                         counter += 1
                     except Exception as db_exc:
-                        conn.rollback()
                         print(f"Error saving fighter {name}: {db_exc}")
 
         # determine if there is another page via "Load More"
@@ -639,15 +311,6 @@ def merge_scrape_and_find_last_page(start_page=1, delay=1):
         time.sleep(delay)
 
     return all_fighter_links, last_page, last_soup
-
-
-
-
-
-
-
-
-
 
 
 # for testing just the merged function
