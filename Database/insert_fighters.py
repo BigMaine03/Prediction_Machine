@@ -7,11 +7,11 @@ def insert_fighter(connection, fighter_dict):
     fighter_url = None
 
     if isinstance(fighter_dict, dict):
-        fighter_name = fighter_dict.get("name") or fighter_dict.get("fighter_name")
-        fighter_url = fighter_dict.get("url") or fighter_dict.get("fighter_url")
+        fighter_name = fighter_dict.get("fighter_name") or fighter_dict.get("name")
+        fighter_url = fighter_dict.get("fighter_url") or fighter_dict.get("url")
 
     if not fighter_name:
-        raise ValueError("fighter_dict must contain a non-empty 'name' field")
+        raise ValueError("fighter_dict must contain a non-empty 'fighter_name' or 'name' field")
 
     try:
         with connection.cursor() as cursor:
