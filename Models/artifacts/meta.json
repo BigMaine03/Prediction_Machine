@@ -1,0 +1,76 @@
+{
+  "saved_at": "2026-09-04T19:38:35",
+  "fit_start": "2015-01-01",
+  "val_start": "2024-01-01",
+  "test_start": "2025-01-01",
+  "models": {
+    "win": {
+      "path": "win.joblib",
+      "n_features": 670,
+      "metrics": {
+        "trees": 98,
+        "n_test": 846,
+        "logloss": 0.6657674665041003,
+        "acc": 0.58274231678487,
+        "brier": 0.23664228991872444,
+        "n_features": 670,
+        "veteran_test_n": 326,
+        "veteran_test_logloss": 0.6621174942130691,
+        "veteran_test_acc": 0.5920245398773006,
+        "veteran_trained_logloss": 0.6602573531902641,
+        "veteran_trained_acc": 0.6288343558282209
+      }
+    },
+    "slpm": {
+      "path": "slpm.joblib",
+      "n_features": 661,
+      "metrics": {
+        "trees": 115,
+        "n_test": 858,
+        "mae": 2.266580122657056,
+        "baseline_mae": 2.5699584590992024,
+        "baseline_name": "a_career_sig_str_landed_pm_avg",
+        "n_features": 661
+      }
+    },
+    "td": {
+      "path": "td.joblib",
+      "n_features": 732,
+      "metrics": {
+        "trees": 146,
+        "n_test": 858,
+        "mae": 1.173025553616465,
+        "baseline_mae": 1.2103151250901567,
+        "baseline_name": "a_career_td_landed_avg",
+        "n_features": 732
+      }
+    },
+    "ctrl": {
+      "path": "ctrl.joblib",
+      "n_features": 732,
+      "metrics": {
+        "trees": 113,
+        "n_test": 858,
+        "mae": 116.57162244836768,
+        "baseline_mae": 115.25067397745157,
+        "baseline_name": "a_career_ctrl_seconds_avg",
+        "n_features": 732
+      }
+    }
+  },
+  "win_n_features": 670,
+  "grappling_n_features": 732,
+  "win_recipe": "pre-grappling columns plus OOF stacked SLpM/TD/ctrl (stack_a/b/diff for each); no this-fight actual stats",
+  "grappling_recipe": "all fight_model_train columns except ids/labels",
+  "stack_features": [
+    "stack_a_slpm",
+    "stack_b_slpm",
+    "stack_diff_slpm",
+    "stack_a_td",
+    "stack_b_td",
+    "stack_diff_td",
+    "stack_a_ctrl",
+    "stack_b_ctrl",
+    "stack_diff_ctrl"
+  ]
+}

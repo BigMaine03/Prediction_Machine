@@ -1,0 +1,40 @@
+"""
+Debug script — inspects what extract_fighters actually produces for one fight.
+Run standalone: python debug_extract_fighters.py
+"""
+import asyncio
+from playwright.async_api import async_playwright
+from bs4 import BeautifulSoup
+
+from Scraper.scrape_ufc_stats import extract_fighters
+
+TEST_URL = "http://ufcstats.com/fight-details/127ba4a1ccb3d4a6"
+
+
+async def main():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+        await page.goto(TEST_URL, wait_until="networkidle")
+        html = await page.content()
+        soup = BeautifulSoup(html, "html.parser")
+
+        name_cells = soup.select("td.b-fight-details__table-col.l-page_align_left")
+        print(f"name_cells found on page: {len(name_cells)}\n")
+        for i, cell in enumerate(name_cells):
+            link = cell.find("a", class_="b-link b-link_style_black")
+            print(f"cell {i}: text={cell.get_text(' ', strip=True)!r}, has_matching_link={link is not None}")
+
+        print("\n--- extract_fighters() result ---")
+        result = extract_fighters(soup)
+        print("fighter1 name:", result["fighter1"]["name"])
+        print("fighter1 url:", result["fighter1"]["url"])
+        print("fighter2 name:", result["fighter2"]["name"])
+        print("fighter2 url:", result["fighter2"]["url"])
+
+        await browser.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

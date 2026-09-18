@@ -1,0 +1,13 @@
+{
+    "include": ["."],
+    "exclude": [
+        "**/__pycache__",
+        "**/.git"
+    ],
+    "pythonVersion": "3.9",
+    "executionEnvironments": [
+        {
+            "root": "."
+        }
+    ]
+}

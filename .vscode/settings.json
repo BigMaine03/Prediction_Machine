@@ -1,0 +1,12 @@
+{
+  "python.defaultInterpreterPath": "/Users/Manas/opt/anaconda3/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.languageServer": "Pylance",
+  "python.analysis.extraPaths": [
+    "/Users/Manas/Desktop/Manas_pred_machine",
+    "/Users/Manas/Desktop/Manas_pred_machine/Scraper",
+    "/Users/Manas/opt/anaconda3/lib/python3.9/site-packages"
+  ],
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.diagnosticMode": "workspace"
+}
